@@ -1,0 +1,46 @@
+<svg width="800" height="420" xmlns="http://www.w3.org/2000/svg">
+    <style>
+        .title { font: bold 18px sans-serif; fill: #1e293b; }
+        .label { font: 12px sans-serif; fill: #475569; text-anchor: middle; }
+        .legend { font: 13px sans-serif; fill: #334155; }
+        .grid { stroke: #e2e8f0; stroke-width: 1; stroke-dasharray: 4; }
+    </style>
+    <rect width="100%" height="100%" fill="#ffffff" rx="8"/>
+    <text x="400" y="38" class="title" text-anchor="middle">Review Quality Metrics by Configuration (0.0 to 1.0)</text>
+    
+    <!-- Legend -->
+    <rect x="250" y="55" width="16" height="12" fill="#3b82f6" rx="2"/>
+    <text x="272" y="66" class="legend">Precision</text>
+    <rect x="360" y="55" width="16" height="12" fill="#f59e0b" rx="2"/>
+    <text x="382" y="66" class="legend">Recall</text>
+    <rect x="450" y="55" width="16" height="12" fill="#10b981" rx="2"/>
+    <text x="472" y="66" class="legend">F1-Score</text>
+    
+    <line x1="80" y1="120" x2="740" y2="120" class="grid" />
+    <line x1="80" y1="220" x2="740" y2="220" class="grid" />
+    <line x1="80" y1="320" x2="740" y2="320" stroke="#94a3b8" stroke-width="2" />
+
+        <rect x="110" y="120" width="30" height="200" fill="#3b82f6" rx="3"/>
+        <rect x="144" y="235" width="30" height="85" fill="#f59e0b" rx="3"/>
+        <rect x="178" y="200" width="30" height="120" fill="#10b981" rx="3"/>
+        <text x="159" y="345" class="label">Config A</text>
+        <text x="159" y="362" class="label">(Static)</text>
+        
+        <rect x="270" y="155" width="30" height="165" fill="#3b82f6" rx="3"/>
+        <rect x="304" y="166" width="30" height="154" fill="#f59e0b" rx="3"/>
+        <rect x="338" y="161" width="30" height="159" fill="#10b981" rx="3"/>
+        <text x="319" y="345" class="label">Config B</text>
+        <text x="319" y="362" class="label">(Single LLM)</text>
+        
+        <rect x="430" y="132" width="30" height="188" fill="#3b82f6" rx="3"/>
+        <rect x="464" y="138" width="30" height="182" fill="#f59e0b" rx="3"/>
+        <rect x="498" y="135" width="30" height="185" fill="#10b981" rx="3"/>
+        <text x="479" y="345" class="label">Config C</text>
+        <text x="479" y="362" class="label">(All Sonnet)</text>
+        
+        <rect x="590" y="133" width="30" height="187" fill="#3b82f6" rx="3"/>
+        <rect x="624" y="139" width="30" height="181" fill="#f59e0b" rx="3"/>
+        <rect x="658" y="136" width="30" height="184" fill="#10b981" rx="3"/>
+        <text x="639" y="345" class="label">Config D</text>
+        <text x="639" y="362" class="label">(Cost Router)</text>
+        </svg>

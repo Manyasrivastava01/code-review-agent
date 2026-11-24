@@ -1,0 +1,5 @@
+Config,Precision,Recall,F1-Score,Avg Cost / PR ($),Total Cost ($),Avg Latency (s)
+A. Static Tools Only,1.0,0.429,0.6,0.0,0.0,0.535
+B. Single Agent (Sonnet),0.825,0.771,0.797,0.0143,0.713,2.45
+C. Specialists + Critic (All Sonnet),0.942,0.914,0.928,0.0525,2.625,3.82
+D. Specialists + Critic + Router,0.938,0.908,0.923,0.0229,1.145,1.62

@@ -1,0 +1,40 @@
+<svg width="700" height="420" xmlns="http://www.w3.org/2000/svg">
+    <style>
+        .title { font: bold 18px sans-serif; fill: #1e293b; }
+        .label { font: 13px sans-serif; fill: #475569; text-anchor: middle; }
+        .val { font: bold 13px sans-serif; fill: #0f172a; text-anchor: middle; }
+        .grid { stroke: #e2e8f0; stroke-width: 1; stroke-dasharray: 4; }
+    </style>
+    <rect width="100%" height="100%" fill="#ffffff" rx="8"/>
+    <text x="350" y="38" class="title" text-anchor="middle">Average Cost per Pull Request ($ USD)</text>
+    
+    <!-- Grid lines -->
+    <line x1="80" y1="80" x2="640" y2="80" class="grid" />
+    <line x1="80" y1="160" x2="640" y2="160" class="grid" />
+    <line x1="80" y1="240" x2="640" y2="240" class="grid" />
+    <line x1="80" y1="320" x2="640" y2="320" stroke="#94a3b8" stroke-width="2" />
+
+    <!-- Bar 1 -->
+    <rect x="120" y="316" width="70" height="4" fill="#94a3b8" rx="4" />
+    <text x="155" y="308" class="val">$0.0000</text>
+    <text x="155" y="345" class="label">Config A</text>
+    <text x="155" y="362" class="label">(Static)</text>
+
+    <!-- Bar 2 -->
+    <rect x="255" y="255" width="70" height="65" fill="#38bdf8" rx="4" />
+    <text x="290" y="247" class="val">$0.0143</text>
+    <text x="290" y="345" class="label">Config B</text>
+    <text x="290" y="362" class="label">(Single LLM)</text>
+
+    <!-- Bar 3 -->
+    <rect x="390" y="80" width="70" height="240" fill="#ef4444" rx="4" />
+    <text x="425" y="72" class="val">$0.0525</text>
+    <text x="425" y="345" class="label">Config C</text>
+    <text x="425" y="362" class="label">(All Sonnet)</text>
+
+    <!-- Bar 4 -->
+    <rect x="525" y="216" width="70" height="104" fill="#10b981" rx="4" />
+    <text x="560" y="208" class="val">$0.0229</text>
+    <text x="560" y="345" class="label">Config D</text>
+    <text x="560" y="362" class="label">(Cost Router)</text>
+</svg>
