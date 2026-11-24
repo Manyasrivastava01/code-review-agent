@@ -1,6 +1,7 @@
-"""End-to-end automated reviewer combining deterministic tools and diff filtering."""
+"""End-to-end automated reviewer combining deterministic tools, parallel specialists, critic, policy, and idempotency."""
 
 import argparse
+import asyncio
 import os
 import sys
 import tempfile
@@ -18,12 +19,19 @@ from github.GithubException import GithubException
 from src.schemas import Finding
 from src.diff_filter import parse_diff_added_lines, filter_findings_by_diff
 from src.analyzers.runner import run_all_analyzers
+from src.agent.specialists import run_specialists_parallel
+from src.agent.critic import CriticAgent
+from src.deduplication import deduplicate_findings
+from src.policy import load_policy, evaluate_policy
+from src.storage import AuditStorage
 
 
 def run_pr_review(repo_name: str, pr_number: int, token: str):
-    """Run full deterministic review on a Pull Request."""
+    """Run complete Phase D multi-agent review on a Pull Request."""
     auth = Auth.Token(token)
     g = Github(auth=auth)
+    storage = AuditStorage()
+    policy = load_policy()
 
     try:
         repo = g.get_repo(repo_name)
@@ -33,28 +41,33 @@ def run_pr_review(repo_name: str, pr_number: int, token: str):
         print(f"\n==================================================")
         print(f"Reviewing PR #{pr.number}: {pr.title}")
         print(f"Repo: {repo_name} | Head SHA: {pr.head.sha[:7]}")
+        print(f"Policy: '{policy.policy_name}'")
         print(f"==================================================\n")
 
         # 1. Inspect changed files & diff hunks
         pr_files = list(pr.get_files())
         changed_lines_by_file: dict[str, set[int]] = {}
         files_to_scan: list[str] = []
+        combined_diff_by_file: dict[str, str] = {}
 
-        # We create a working directory for files if not already on disk
+        all_findings: list[Finding] = []
+
         with tempfile.TemporaryDirectory() as temp_dir:
+            resolved_temp = Path(temp_dir).resolve()
             for file in pr_files:
                 if file.status == "removed":
                     continue
 
                 norm_path = file.filename.replace("\\", "/")
-                added_lines = parse_diff_added_lines(file.patch or "")
+                patch = file.patch or ""
+                added_lines = parse_diff_added_lines(patch)
                 changed_lines_by_file[norm_path] = added_lines
+                combined_diff_by_file[norm_path] = patch
 
-                # If the file exists in current checkout (e.g. In CI), use it directly
+                # Fetch or use local file content
                 if os.path.exists(file.filename):
                     files_to_scan.append(file.filename)
                 else:
-                    # Download file content at pr.head.sha for local evaluation
                     try:
                         content_file = repo.get_contents(file.filename, ref=pr.head.sha)
                         local_path = os.path.join(temp_dir, file.filename)
@@ -69,13 +82,11 @@ def run_pr_review(repo_name: str, pr_number: int, token: str):
                 print("No files eligible for scanning.")
                 return
 
-            print(f"Scanning {len(files_to_scan)} file(s) with deterministic analyzers...")
-            raw_findings = run_all_analyzers(files_to_scan)
+            # Stage 1: Deterministic Analyzers (Bandit, Ruff, Semgrep)
+            print(f"\n[Stage 1] Scanning {len(files_to_scan)} file(s) with deterministic analyzers...")
+            raw_deterministic = run_all_analyzers(files_to_scan)
 
-            # Map temp paths back to repository relative paths
-            normalized_findings: list[Finding] = []
-            resolved_temp = Path(temp_dir).resolve()
-            for f in raw_findings:
+            for f in raw_deterministic:
                 f_path = Path(f.file_path).resolve()
                 try:
                     rel_to_temp = f_path.relative_to(resolved_temp)
@@ -86,40 +97,91 @@ def run_pr_review(repo_name: str, pr_number: int, token: str):
                         path = str(rel_to_cwd).replace("\\", "/")
                     except ValueError:
                         path = f.file_path.replace("\\", "/")
-
                 f.file_path = path.lstrip("./")
-                normalized_findings.append(f)
+                all_findings.append(f)
 
-        print(f"\nTotal raw findings from all tools: {len(normalized_findings)}")
+            # Stage 2: Specialist Agents (Security, Correctness, Performance) in Parallel
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if api_key and not api_key.startswith("your_"):
+                print(f"\n[Stage 2] Running 3 Specialist Agents in parallel on changed files...")
+                for norm_path, patch in combined_diff_by_file.items():
+                    if not patch:
+                        continue
+                    try:
+                        specialist_results = asyncio.run(
+                            run_specialists_parallel(
+                                repo_dir=str(resolved_temp) if os.path.exists(temp_dir) else ".",
+                                pr_diff=patch,
+                                target_file=norm_path,
+                            )
+                        )
+                        for sf in specialist_results:
+                            sf.file_path = norm_path
+                            all_findings.append(sf)
+                    except Exception as err:
+                        print(f"Notice: Specialist agent run skipped ({err})")
+            else:
+                print(f"\n[Stage 2] Skipping live LLM specialists (ANTHROPIC_API_KEY not configured).")
 
-        # 2. Filter findings strictly to lines touched by PR diff
-        actionable_findings = filter_findings_by_diff(normalized_findings, changed_lines_by_file)
-        print(f"Actionable findings on changed lines: {len(actionable_findings)}")
+        # Stage 3: Filter strictly to lines touched by PR diff
+        print(f"\n[Stage 3] Filtering findings to lines touched by PR diff...")
+        diff_findings = filter_findings_by_diff(all_findings, changed_lines_by_file)
+        print(f"  -> Retained {len(diff_findings)} finding(s) on active diff lines")
 
-        # 3. Post summary comment
-        tool_counts: dict[str, int] = {}
-        for f in actionable_findings:
-            tool_counts[f.tool] = tool_counts.get(f.tool, 0) + 1
+        # Stage 4: Deduplicate overlapping findings
+        print(f"\n[Stage 4] Deduplicating findings across tools & agents...")
+        deduped_findings = deduplicate_findings(diff_findings)
+        print(f"  -> {len(deduped_findings)} unique finding(s) after deduplication")
 
-        breakdown = ", ".join(f"{tool}: {count}" for tool, count in tool_counts.items()) or "None"
-        summary_text = (
-            "### 🤖 Deterministic Code Review Report\n\n"
-            f"- **Commit**: `{pr.head.sha[:7]}`\n"
-            f"- **Files Scanned**: {len(files_to_scan)}\n"
-            f"- **Actionable Findings**: {len(actionable_findings)} ({breakdown})\n\n"
-        )
-        if not actionable_findings:
-            summary_text += "✅ **No issues detected on the changed lines!**"
-        else:
-            summary_text += "⚠️ **Issues detected on modified lines. See inline comments below.**"
-
-        pr.create_issue_comment(summary_text)
-        print("Summary comment posted to PR.")
-
-        # 4. Post inline review comments
-        for finding in actionable_findings:
+        # Stage 5: Critic Agent (False-Positive Filter)
+        if api_key and not api_key.startswith("your_") and deduped_findings:
+            print(f"\n[Stage 5] Critic Agent evaluating findings for false positives...")
             try:
-                print(f"Posting inline comment: [{finding.tool.upper()}] {finding.rule_id} on {finding.file_path}:{finding.line_number}")
+                critic = CriticAgent()
+                accepted_findings, rejected_findings = critic.filter_findings(
+                    findings=deduped_findings,
+                    pr_diff="\n\n".join(combined_diff_by_file.values()),
+                )
+                print(f"  -> Critic accepted {len(accepted_findings)}, rejected {len(rejected_findings)} false positive(s)")
+            except Exception as err:
+                print(f"Notice: Critic filtering skipped ({err}). Retaining deduplicated findings.")
+                accepted_findings = deduped_findings
+        else:
+            accepted_findings = deduped_findings
+
+        # Stage 6: Policy Engine & Merge Status Check
+        print(f"\n[Stage 6] Evaluating policy gates...")
+        decision = evaluate_policy(accepted_findings, policy)
+        print(f"  -> Policy Decision: {'PASSED' if decision.passed else 'BLOCKED'}")
+        for reason in decision.reasons:
+            print(f"     * {reason}")
+
+        # Post GitHub commit status check (blocks or clears merge button)
+        try:
+            status_state = "success" if decision.passed else "failure"
+            status_desc = decision.summary[:135]
+            commit.create_status(
+                state=status_state,
+                context=policy.status_check_context,
+                description=status_desc,
+            )
+            print(f"GitHub Status Check set to: {status_state.upper()} ({policy.status_check_context})")
+        except GithubException as ge:
+            print(f"Notice: Could not post commit status check: {ge}")
+
+        # Stage 7: Idempotent Inline Review Comments
+        print(f"\n[Stage 7] Posting inline review comments (with idempotency check)...")
+        posted_count = 0
+        skipped_count = 0
+
+        for finding in accepted_findings:
+            if storage.is_already_posted(repo_name, pr.number, finding.fingerprint):
+                print(f"  -> [SKIP] Already posted: {finding.rule_id} on {finding.file_path}:{finding.line_number}")
+                skipped_count += 1
+                continue
+
+            try:
+                print(f"  -> [POST] [{finding.tool.upper()}] {finding.rule_id} on {finding.file_path}:{finding.line_number}")
                 pr.create_review_comment(
                     body=finding.to_markdown(),
                     commit=commit,
@@ -127,11 +189,36 @@ def run_pr_review(repo_name: str, pr_number: int, token: str):
                     line=finding.line_number,
                     side="RIGHT",
                 )
+                storage.record_posted_finding(repo_name, pr.number, pr.head.sha, finding)
+                posted_count += 1
             except GithubException as ge:
-                # e.g., if line comment already exists or line isn't commentable
                 print(f"  Note: Failed to post inline comment ({ge.data.get('message', str(ge))})")
 
-        print("\nReview run completed successfully!")
+        # Stage 8: Post PR Summary Comment
+        storage.record_review_run(
+            repo_name=repo_name,
+            pr_number=pr.number,
+            commit_sha=pr.head.sha,
+            policy_passed=decision.passed,
+            total_findings=len(accepted_findings),
+        )
+
+        status_badge = "✅ **PASS: Clear to Merge**" if decision.passed else "❌ **BLOCKED: Policy Violations**"
+        summary_body = (
+            f"### 🤖 Autonomous Code Review Agent — Summary Report\n\n"
+            f"- **Commit**: `{pr.head.sha[:7]}`\n"
+            f"- **Policy Gate**: {status_badge}\n"
+            f"- **Findings**: {len(accepted_findings)} actionable (New: {posted_count}, Skipped Duplicates: {skipped_count})\n"
+            f"- **Policy Summary**: {decision.summary}\n\n"
+        )
+        if decision.reasons:
+            summary_body += "**Blocking Violations:**\n"
+            for r in decision.reasons:
+                summary_body += f"- {r}\n"
+
+        pr.create_issue_comment(summary_body)
+        print("Summary comment posted to PR.")
+        print("\nAll review stages completed successfully!")
 
     finally:
         g.close()
@@ -140,7 +227,7 @@ def run_pr_review(repo_name: str, pr_number: int, token: str):
 def main():
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="Run deterministic analyzers and review a PR.")
+    parser = argparse.ArgumentParser(description="Run complete code review agent on a PR.")
     parser.add_argument(
         "--repo",
         type=str,

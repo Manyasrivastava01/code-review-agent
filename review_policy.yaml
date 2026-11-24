@@ -1,0 +1,19 @@
+version: "1.0"
+policy_name: "Default Repository Guardrails"
+
+# Criteria that cause the PR merge check to FAIL
+block_rules:
+  # Any finding with these severities blocks the merge
+  blocked_severities:
+    - "critical"
+    - "error"
+
+  # Any finding in these categories blocks the merge regardless of severity
+  blocked_categories:
+    - "security"
+
+  # Maximum allowable warnings before failing
+  max_warnings: 3
+
+# GitHub Commit Status Check label
+status_check_context: "code-review/autonomous-agent"
