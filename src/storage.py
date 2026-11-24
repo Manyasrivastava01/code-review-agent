@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from src.schemas import Finding
+from src.router.pricing import CallMetrics
 
 DEFAULT_DB_PATH = "audit.db"
 
@@ -61,6 +62,21 @@ class AuditStorage:
                     policy_passed INTEGER NOT NULL,
                     total_findings INTEGER NOT NULL,
                     run_at TEXT NOT NULL
+                )
+            """)
+
+                     # 3. LLM Cost and Token Usage logs
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS llm_cost_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pr_number INTEGER NOT NULL,
+                    caller TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL,
+                    latency_ms REAL NOT NULL,
+                    cost_usd REAL NOT NULL,
+                    timestamp TEXT NOT NULL
                 )
             """)
             conn.commit()
@@ -129,3 +145,41 @@ class AuditStorage:
                 ) VALUES (?, ?, ?, ?, ?, ?)
             """, (repo_name, pr_number, commit_sha, 1 if policy_passed else 0, total_findings, now))
             conn.commit()
+
+    def record_llm_cost(self, pr_number: int, metrics: CallMetrics):
+        """Log tokens, latency, and dollar cost of an LLM invocation."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.now(timezone.utc).isoformat()
+            cursor.execute("""
+                INSERT INTO llm_cost_logs (
+                    pr_number, caller, model, input_tokens, output_tokens, latency_ms, cost_usd, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                pr_number,
+                metrics.caller,
+                metrics.model,
+                metrics.input_tokens,
+                metrics.output_tokens,
+                metrics.latency_ms,
+                metrics.cost_usd,
+                now,
+            ))
+            conn.commit()
+
+    def get_pr_cost_summary(self, pr_number: int) -> dict:
+        """Return total cost, tokens, and latency for a given PR."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_calls,
+                    COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+                    COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+                    COALESCE(SUM(cost_usd), 0.0) as total_cost_usd,
+                    COALESCE(AVG(latency_ms), 0.0) as avg_latency_ms
+                FROM llm_cost_logs
+                WHERE pr_number = ?
+            """, (pr_number,))
+            row = cursor.fetchone()
+            return dict(row) if row else {}
